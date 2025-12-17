@@ -7,7 +7,7 @@ module Fastlane
     end
 
     class TestfairyAction < Action
-      def self.upload_build(upload_url, ipa, options, timeout)
+      def self.upload_build(upload_url, ipa, options, timeout, oidc_token = nil)
         require 'faraday'
         require 'faraday_middleware'
 
@@ -33,6 +33,10 @@ module Fastlane
           connection.post do |req|
             req.options.timeout = timeout
             req.url("/api/upload/")
+            # Use Bearer token authentication if OIDC token is provided
+            if oidc_token
+              req.headers['Authorization'] = "Bearer #{oidc_token}"
+            end
             req.body = options
           end
         rescue Faraday::TimeoutError
@@ -41,6 +45,11 @@ module Fastlane
       end
 
       def self.run(params)
+        # Validate that either api_key or oidc_token is provided
+        unless params[:api_key] || params[:oidc_token]
+          UI.user_error!("No authentication provided. Pass either `api_key` or `oidc_token`")
+        end
+
         UI.success('Starting with ipa upload to TestFairy...')
 
         metrics_to_client = lambda do |metrics|
@@ -69,12 +78,14 @@ module Fastlane
           end
         end
 
-        # Rejecting key `upload_url` and `timeout` as we don't need it in options
+        # Rejecting keys that are not needed in the form body
         client_options = Hash[params.values.reject do |key, value|
-          [:upload_url, :timeout].include?(key)
+          [:upload_url, :timeout, :oidc_token].include?(key)
         end.map do |key, value|
           case key
           when :api_key
+            # Only include api_key if not using OIDC authentication
+            next nil if params[:oidc_token]
             [key, value]
           when :ipa
             [key, value]
@@ -109,14 +120,14 @@ module Fastlane
           else
             UI.user_error!("Unknown parameter: #{key}")
           end
-        end]
+        end.compact]
 
         path = params[:ipa] || params[:apk]
         UI.user_error!("No ipa or apk were given") unless path
 
         return path if Helper.test?
 
-        response = self.upload_build(params[:upload_url], path, client_options, params[:timeout])
+        response = self.upload_build(params[:upload_url], path, client_options, params[:timeout], params[:oidc_token])
         if parse_response(response)
           UI.success("Build URL: #{Actions.lane_context[SharedValues::TESTFAIRY_BUILD_URL]}")
           UI.success("Download URL: #{Actions.lane_context[SharedValues::TESTFAIRY_DOWNLOAD_URL]}")
@@ -157,20 +168,28 @@ module Fastlane
       def self.details
         <<~DETAILS
           Upload a new build to [TestFairy](https://saucelabs.com/products/mobile-testing/app-betas).
-          You can retrieve your API key on [your settings page](https://app.testfairy.com/settings/access-key)
+
+          **Authentication Options:**
+          - **API Key**: You can retrieve your API key on [your settings page](https://app.testfairy.com/settings/access-key)
+          - **OIDC Token**: Use an OIDC access token from your identity provider (Okta, Azure AD, Auth0, etc.) for enterprise SSO authentication
         DETAILS
       end
 
       def self.available_options
         [
-          # required
+          # Authentication (one of api_key or oidc_token is required)
           FastlaneCore::ConfigItem.new(key: :api_key,
-                                       env_name: "FL_TESTFAIRY_API_KEY", # The name of the environment variable
-                                       description: "API Key for TestFairy", # a short description of this parameter
+                                       env_name: "FL_TESTFAIRY_API_KEY",
+                                       description: "API Key for TestFairy. Required unless using oidc_token",
                                        sensitive: true,
-                                       verify_block: proc do |value|
-                                         UI.user_error!("No API key for TestFairy given, pass using `api_key: 'key'`") unless value.to_s.length > 0
-                                       end),
+                                       optional: true,
+                                       conflicting_options: [:oidc_token]),
+          FastlaneCore::ConfigItem.new(key: :oidc_token,
+                                       env_name: "FL_TESTFAIRY_OIDC_TOKEN",
+                                       description: "OIDC access token for TestFairy authentication. Use instead of api_key for OIDC-based auth",
+                                       sensitive: true,
+                                       optional: true,
+                                       conflicting_options: [:api_key]),
           FastlaneCore::ConfigItem.new(key: :ipa,
                                        env_name: 'TESTFAIRY_IPA_PATH',
                                        description: 'Path to your IPA file for iOS',
@@ -292,16 +311,24 @@ module Fastlane
 
       def self.example_code
         [
-          'testfairy(
+          '# Using API Key authentication
+          testfairy(
             api_key: "...",
             ipa: "./ipa_file.ipa",
             comment: "Build #{lane_context[SharedValues::BUILD_NUMBER]}",
           )',
-          'testfairy(
+          '# Using API Key authentication for Android
+          testfairy(
             api_key: "...",
             apk: "../build/app/outputs/apk/qa/release/app-qa-release.apk",
             comment: "Build #{lane_context[SharedValues::BUILD_NUMBER]}",
-           )'
+          )',
+          '# Using OIDC token authentication (for enterprise SSO)
+          testfairy(
+            oidc_token: ENV["OIDC_ACCESS_TOKEN"],
+            ipa: "./ipa_file.ipa",
+            comment: "Build #{lane_context[SharedValues::BUILD_NUMBER]}",
+          )'
         ]
       end
 
