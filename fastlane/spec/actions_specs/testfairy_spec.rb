@@ -9,7 +9,7 @@ describe Fastlane do
         end.to raise_error(FastlaneCore::Interface::FastlaneError)
       end
 
-      it "raises an error if no api key was given" do
+      it "raises an error if no authentication was given" do
         allow(FastlaneCore::FastlaneFolder).to receive(:path).and_return(nil)
         expect do
           Fastlane::FastFile.new.parse("lane :test do
@@ -17,7 +17,7 @@ describe Fastlane do
               ipa: './fastlane/spec/fixtures/fastfiles/Fastfile1',
             })
           end").runner.execute(:test)
-        end.to raise_error(FastlaneCore::Interface::FastlaneError, /No API key/)
+        end.to raise_error(FastlaneCore::Interface::FastlaneError, /No authentication provided/)
       end
 
       it "raises an error if no ipa or apk path was given" do
@@ -116,6 +116,31 @@ describe Fastlane do
             })
           end").runner.execute(:test)
         end.not_to(raise_error)
+      end
+
+      it "works with oidc_token instead of api_key" do
+        allow(FastlaneCore::FastlaneFolder).to receive(:path).and_return(nil)
+        expect do
+          Fastlane::FastFile.new.parse("lane :test do
+            testfairy({
+              ipa: './fastlane/spec/fixtures/fastfiles/Fastfile1',
+              oidc_token: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test',
+            })
+          end").runner.execute(:test)
+        end.not_to(raise_error)
+      end
+
+      it "raises an error if both api_key and oidc_token are given" do
+        allow(FastlaneCore::FastlaneFolder).to receive(:path).and_return(nil)
+        expect do
+          Fastlane::FastFile.new.parse("lane :test do
+            testfairy({
+              ipa: './fastlane/spec/fixtures/fastfiles/Fastfile1',
+              api_key: 'thisistest',
+              oidc_token: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test',
+            })
+          end").runner.execute(:test)
+        end.to raise_error(FastlaneCore::Interface::FastlaneError, /Unresolved conflict between options: 'api_key' and 'oidc_token'/)
       end
     end
   end
